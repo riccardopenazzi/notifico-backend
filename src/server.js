@@ -49,6 +49,31 @@ app.get('/api/get-user-info', async (req, res) => {
     }
 });
 
+app.get('/api/get-user-categories', async (req, res) => {
+    try {
+        const token = req.cookies.token;
+        if (!token) {
+            return res.status(401).json({ error: 'Non autenticato', serverMessage: 'Non sei autenticato' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [decoded.id]);
+
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Utente non trovato', serverMessage: 'Utente non trovato' });
+        }
+
+        const [categories] = await pool.query(
+            "SELECT c.* FROM categories c JOIN user_categories uc ON c.id = uc.categoryId WHERE uc.userId = ?",
+            [decoded.id]
+        );
+
+        res.json({ success: true, serverResult: categories });
+    } catch (err) {
+        res.status(401).json({ error: 'Token non valido' });
+    }
+});
+
 //POST-----------------------------------------------------------------------------------------------------------------------------------------------
 
 app.post('/api/execute-login', async (req, res) => {
@@ -133,6 +158,32 @@ app.post('/api/execute-signup', async (req, res) => {
 app.post('/api/execute-logout', async (req, res) => {
     res.clearCookie('token');
     res.json({ success: true });
+});
+
+app.post('/api/create-user-categories', async (req, res) => {
+    try {
+        const token = req.cookies.token;
+        if (!token) {
+            return res.status(401).json({ error: 'Non autenticato', serverMessage: 'Non sei autenticato' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [decoded.id]);
+
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Utente non trovato', serverMessage: 'Utente non trovato' });
+        }
+
+        const { userId, color, name } = req.body;
+        
+        const [result] = await pool.query('INSERT INTO categories (name, color) VALUES (?, ?)', [name, color]);
+        const categoryId = result.insertId;
+        await pool.query('INSERT INTO user_categories (userId, categoryId) VALUES (?, ?)', [userId, categoryId]);
+
+        res.json({ success: true });
+    } catch (err) {
+        res.status(401).json({ error: 'Token non valido' });
+    }
 });
 
 const PORT = 3000;
