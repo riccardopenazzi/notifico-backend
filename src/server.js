@@ -1,12 +1,14 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const pool = require('./db-connection');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const cors = require('cors');
 
 const app = express();
-app.use(cors());
+const cookies = require('cookie-parser');
+app.use(cookies());
+app.use(cors({ origin: 'http://localhost:8081', credentials: true }));
 app.use(express.json());
 
 app.get('/test-db-connection', async (req, res) => {
@@ -27,6 +29,28 @@ app.get('/api/users', async (req, res) => {
     }
 });
 
+app.get('/api/get-user-info', async (req, res) => {
+    try {
+        const token = req.cookies.token;
+        if (!token) {
+            return res.status(401).json({ error: 'Non autenticato', serverMessage: 'Non sei autenticato' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [decoded.id]);
+
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Utente non trovato', serverMessage: 'Utente non trovato' });
+        }
+
+        res.json({ success: true, serverResult: users[0] });
+    } catch (err) {
+        res.status(401).json({ error: 'Token non valido' });
+    }
+});
+
+//POST-----------------------------------------------------------------------------------------------------------------------------------------------
+
 app.post('/api/execute-login', async (req, res) => {
     const { email, password } = req.body;
 
@@ -46,13 +70,25 @@ app.post('/api/execute-login', async (req, res) => {
 
         const token = jwt.sign(
             { id: user.id, email: user.email },
-            'criptato', //da cambiare con una variabile d'ambiente
+            process.env.JWT_SECRET,
             { expiresIn: '1h' }
         );
-        vars = {};
-        vars.token = token;
-        vars.success = true;
-        res.json(vars);
+
+        const expires = new Date(Date.now() + 60 * 60 * 1000); //1h
+        res.cookie('token', token, {
+            httpOnly: true,
+            // secure: false,
+            // domain: 'localhost',
+            // sameSite: 'none',
+            // expires: expires,
+            // path: '/',
+            // maxAge: 3600000, //1h
+        });
+
+        res.json({
+            success: true,
+            serverResult: user,
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -69,11 +105,34 @@ app.post('/api/execute-signup', async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        await pool.query('INSERT INTO users (email, password, name, surname, avatar) VALUES (?, ?, ?, ?, ?)', [email, hashedPassword, name, surname, avatar]);
+        const [result] = await pool.query('INSERT INTO users (email, password, name, surname, avatar) VALUES (?, ?, ?, ?, ?)', [email, hashedPassword, name, surname, avatar]);
+
+        const token = jwt.sign(
+            { id: result.insertId, email: email },
+            process.env.JWT_SECRET,
+            { expiresIn: '1h' }
+        );
+
+        const expires = new Date(Date.now() + 60 * 60 * 1000); //1h
+        res.cookie('token', token, {
+            httpOnly: true,
+            // secure: false,
+            // domain: 'localhost',
+            // sameSite: 'none',
+            // expires: expires,
+            // path: '/',
+            // maxAge: 3600000, //1h
+        });
+
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+
+app.post('/api/execute-logout', async (req, res) => {
+    res.clearCookie('token');
+    res.json({ success: true });
 });
 
 const PORT = 3000;
