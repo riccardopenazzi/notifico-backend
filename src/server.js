@@ -74,6 +74,31 @@ app.get('/api/get-user-categories', async (req, res) => {
     }
 });
 
+app.get('/api/get-user-deadlines', async (req, res) => {
+    try {
+        const token = req.cookies.token;
+        if (!token) {
+            return res.status(401).json({ error: 'Non autenticato', serverMessage: 'Non sei autenticato' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [decoded.id]);
+
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Utente non trovato', serverMessage: 'Utente non trovato' });
+        }
+
+        const [deadlines] = await pool.query(
+            "SELECT d.* FROM deadlines d JOIN user_deadlines ud ON d.id = ud.deadlineId WHERE ud.userId = ?",
+            [decoded.id]
+        );
+
+        res.json({ success: true, serverResult: deadlines });
+    } catch (err) {
+        res.status(401).json({ error: 'Token non valido' });
+    }
+});
+
 //POST-----------------------------------------------------------------------------------------------------------------------------------------------
 
 app.post('/api/execute-login', async (req, res) => {
@@ -160,7 +185,7 @@ app.post('/api/execute-logout', async (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/create-user-categories', async (req, res) => {
+app.post('/api/create-user-category', async (req, res) => {
     try {
         const token = req.cookies.token;
         if (!token) {
@@ -181,6 +206,34 @@ app.post('/api/create-user-categories', async (req, res) => {
         await pool.query('INSERT INTO user_categories (userId, categoryId) VALUES (?, ?)', [userId, categoryId]);
 
         res.json({ success: true });
+    } catch (err) {
+        res.status(401).json({ error: 'Token non valido' });
+    }
+});
+
+app.post('/api/create-user-deadline', async (req, res) => {
+    try {
+        const token = req.cookies.token;
+        if (!token) {
+            return res.status(401).json({ error: 'Non autenticato', serverMessage: 'Non sei autenticato' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [decoded.id]);
+
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Utente non trovato', serverMessage: 'Utente non trovato' });
+        }
+
+        const { userId, content } = req.body;
+        const { title, description, categoryId, date } = content;
+        const formattedDate = new Date(date);
+        
+        const [result] = await pool.query('INSERT INTO deadlines (title, description, categoryId, date) VALUES (?, ?, ?, ?)', [title, description, categoryId, formattedDate]);
+        const deadlineId = result.insertId;
+        await pool.query('INSERT INTO user_deadlines (userId, deadlineId) VALUES (?, ?)', [userId, deadlineId]);
+
+        res.json({ success: true, result: req.body });
     } catch (err) {
         res.status(401).json({ error: 'Token non valido' });
     }
