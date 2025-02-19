@@ -5,6 +5,8 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
 
+const checkDeadlines = require('./send-deadlines-remainders');
+
 const app = express();
 const cookies = require('cookie-parser');
 app.use(cookies());
@@ -242,4 +244,6 @@ app.post('/api/create-user-deadline', async (req, res) => {
 const PORT = 3000;
 app.listen(PORT, () => {
     console.log(`Server in esecuzione su http://localhost:${PORT}`);
+    checkDeadlines();
+    setInterval(checkDeadlines, 60 * 1000);
 });
