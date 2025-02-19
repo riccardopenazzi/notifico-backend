@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt');
 const cors = require('cors');
 
 const checkDeadlines = require('./send-deadlines-remainders');
+const { sendEmail } = require('./utils/email-service');
 
 const app = express();
 const cookies = require('cookie-parser');
@@ -176,7 +177,7 @@ app.post('/api/execute-signup', async (req, res) => {
             // maxAge: 3600000, //1h
         });
 
-        res.json({ success: true });
+        res.json({ success: true, userId: result.insertId });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -234,6 +235,7 @@ app.post('/api/create-user-deadline', async (req, res) => {
         const [result] = await pool.query('INSERT INTO deadlines (title, description, categoryId, date) VALUES (?, ?, ?, ?)', [title, description, categoryId, formattedDate]);
         const deadlineId = result.insertId;
         await pool.query('INSERT INTO user_deadlines (userId, deadlineId) VALUES (?, ?)', [userId, deadlineId]);
+        await pool.query('INSERT INTO scheduled_emails (userId, deadlineId, date) VALUES (?, ?, ?)', [userId, deadlineId, formattedDate]);
 
         res.json({ success: true, result: req.body });
     } catch (err) {
@@ -241,9 +243,49 @@ app.post('/api/create-user-deadline', async (req, res) => {
     }
 });
 
+async function sendPendingEmails() {
+    const [emailsToSend] = await pool.query(`
+        SELECT 
+            se.id AS scheduledEmailId,
+            se.date AS scheduledDate,
+            u.email AS recipientEmail,
+            d.title AS deadlineTitle,
+            d.description AS deadlineDescription,
+            c.name AS categoryName
+        FROM scheduled_emails se
+        JOIN users u ON se.userId = u.id
+        JOIN deadlines d ON se.deadlineId = d.id
+        JOIN categories c ON d.categoryId = c.id
+        WHERE se.date >= CURDATE() 
+        AND se.date < CURDATE() + INTERVAL 1 DAY 
+        AND se.toSend = 1;
+    `);
+
+    if (emailsToSend.length > 0) {
+        console.log('Ci sono ', emailsToSend.length, ' email da mandare');
+
+        for (const entry of emailsToSend) {
+            try {
+                await sendEmail(entry.recipientEmail, entry.deadlineTitle, entry.scheduledDate, entry.deadlineDescription);
+                await pool.query(`
+                    UPDATE scheduled_emails
+                    SET toSend = 0
+                    WHERE id = ?;
+                `, [entry.scheduledEmailId]);
+
+                console.log(`Email inviata a: ${entry.recipientEmail} e aggiornata nel DB.`);
+            } catch (error) {
+                console.error(`Errore nell'invio dell'email a ${entry.recipientEmail}:`, error);
+            }
+        }
+    } else {
+        console.log('Nessuna email da mandare');
+    }
+}
+
 const PORT = 3000;
 app.listen(PORT, () => {
     console.log(`Server in esecuzione su http://localhost:${PORT}`);
-    checkDeadlines();
-    setInterval(checkDeadlines, 60 * 1000);
+    sendPendingEmails();
+    setInterval(sendPendingEmails, 60 * 60 * 1000);
 });
