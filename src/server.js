@@ -5,7 +5,6 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
 
-const checkDeadlines = require('./send-deadlines-remainders');
 const { sendEmail } = require('./utils/email-service');
 
 const app = express();
@@ -229,13 +228,17 @@ app.post('/api/create-user-deadline', async (req, res) => {
         }
 
         const { userId, content } = req.body;
-        const { title, description, categoryId, date } = content;
+        const { title, description, categoryId, date, emailsToSend } = content;
         const formattedDate = new Date(date);
         
         const [result] = await pool.query('INSERT INTO deadlines (title, description, categoryId, date) VALUES (?, ?, ?, ?)', [title, description, categoryId, formattedDate]);
         const deadlineId = result.insertId;
         await pool.query('INSERT INTO user_deadlines (userId, deadlineId) VALUES (?, ?)', [userId, deadlineId]);
-        await pool.query('INSERT INTO scheduled_emails (userId, deadlineId, date) VALUES (?, ?, ?)', [userId, deadlineId, formattedDate]);
+
+        for (const emailDate of emailsToSend) {
+            const formattedEmailDate = new Date(emailDate);
+            await pool.query('INSERT INTO scheduled_emails (userId, deadlineId, date) VALUES (?, ?, ?)', [userId, deadlineId, formattedEmailDate]);
+        }
 
         res.json({ success: true, result: req.body });
     } catch (err) {
@@ -247,17 +250,16 @@ async function sendPendingEmails() {
     const [emailsToSend] = await pool.query(`
         SELECT 
             se.id AS scheduledEmailId,
-            se.date AS scheduledDate,
+            d.date AS deadlineDate,
             u.email AS recipientEmail,
             d.title AS deadlineTitle,
             d.description AS deadlineDescription,
-            c.name AS categoryName
+            COALESCE(c.name, 'N/A') AS categoryName
         FROM scheduled_emails se
         JOIN users u ON se.userId = u.id
         JOIN deadlines d ON se.deadlineId = d.id
-        JOIN categories c ON d.categoryId = c.id
-        WHERE se.date >= CURDATE() 
-        AND se.date < CURDATE() + INTERVAL 1 DAY 
+        LEFT JOIN categories c ON d.categoryId = c.id
+        WHERE DATE(se.date) = CURDATE()
         AND se.toSend = 1;
     `);
 
@@ -266,7 +268,7 @@ async function sendPendingEmails() {
 
         for (const entry of emailsToSend) {
             try {
-                await sendEmail(entry.recipientEmail, entry.deadlineTitle, entry.scheduledDate, entry.deadlineDescription);
+                await sendEmail(entry.recipientEmail, entry.deadlineTitle, entry.deadlineDate, entry.deadlineDescription);
                 await pool.query(`
                     UPDATE scheduled_emails
                     SET toSend = 0
