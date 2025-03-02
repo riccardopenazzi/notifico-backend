@@ -10,7 +10,7 @@ const { sendEmail } = require('./utils/email-service');
 const app = express();
 const cookies = require('cookie-parser');
 app.use(cookies());
-app.use(cors({ origin: 'http://localhost:8081', credentials: true }));
+app.use(cors({ origin: process.env.ALLOW_CORS, credentials: true }));
 app.use(express.json());
 
 app.get('/test-db-connection', async (req, res) => {
