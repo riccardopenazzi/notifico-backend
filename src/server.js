@@ -101,6 +101,37 @@ app.get('/api/get-user-deadlines', async (req, res) => {
     }
 });
 
+app.get('/api/get-deadline-scheduled-emails', async (req, res) => {
+    try {
+        const token = req.cookies.token;
+        if (!token) {
+            return res.status(401).json({ error: 'Non autenticato', serverMessage: 'Non sei autenticato' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [decoded.id]);
+
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Utente non trovato', serverMessage: 'Utente non trovato' });
+        }
+
+        const { deadlineId } = req.query;
+        if (!deadlineId) {
+            return res.status(400).json({ error: 'Parametro deadlineId mancante', serverMessage: 'ID della deadline obbligatorio' });
+        }
+
+        const [emails] = await pool.query(
+            "SELECT id, date FROM scheduled_emails WHERE deadlineId = ? ORDER BY date ASC",
+            [deadlineId]
+        );
+
+        res.json({ success: true, serverResult: emails });
+    } catch (err) {
+        console.error('Errore nel recupero delle email programmate:', err);
+        res.status(500).json({ error: 'Errore interno del server' });
+    }
+});
+
 //POST-----------------------------------------------------------------------------------------------------------------------------------------------
 
 app.post('/api/execute-login', async (req, res) => {
@@ -243,6 +274,94 @@ app.post('/api/create-user-deadline', async (req, res) => {
         res.json({ success: true, result: req.body });
     } catch (err) {
         res.status(401).json({ error: 'Token non valido' });
+    }
+});
+
+//PUT-----------------------------------------------------------------------------------------------------------------------------------------------
+
+app.put('/api/update-user-deadline', async (req, res) => {
+    try {
+        const token = req.cookies.token;
+        if (!token) {
+            return res.status(401).json({ error: 'Non autenticato', serverMessage: 'Non sei autenticato' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [decoded.id]);
+
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Utente non trovato', serverMessage: 'Utente non trovato' });
+        }
+
+        const { content } = req.body;
+        const { title, description, categoryId, date, emailsToSend, id } = content;
+        const formattedDate = new Date(date);
+
+        const [deadlineExists] = await pool.query(
+            'SELECT * FROM user_deadlines WHERE userId = ? AND deadlineId = ?',
+            [decoded.id, id]
+        );
+
+        if (deadlineExists.length === 0) {
+            return res.status(403).json({ error: 'Non autorizzato', serverMessage: 'Questa scadenza non ti appartiene' });
+        }
+
+        await pool.query(
+            'UPDATE deadlines SET title = ?, description = ?, categoryId = ?, date = ? WHERE id = ?',
+            [title, description, categoryId, formattedDate, id]
+        );
+
+        await pool.query('DELETE FROM scheduled_emails WHERE deadlineId = ?', [id]);
+
+        for (const emailDate of emailsToSend) {
+            const formattedEmailDate = new Date(emailDate);
+            await pool.query('INSERT INTO scheduled_emails (userId, deadlineId, date) VALUES (?, ?, ?)', [decoded.id, id, formattedEmailDate]);
+        }
+
+        res.json({ success: true, message: 'Deadline aggiornata con successo!', result: req.body });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Errore del server', serverMessage: 'Si è verificato un problema durante l\'aggiornamento' });
+    }
+});
+
+//DELETE--------------------------------------------------------------------------------------------------------------------------------------------------
+
+app.delete('/api/delete-user-deadline/:id', async (req, res) => {
+    try {
+        const token = req.cookies.token;
+        if (!token) {
+            return res.status(401).json({ error: 'Non autenticato', serverMessage: 'Non sei autenticato' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [decoded.id]);
+
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Utente non trovato', serverMessage: 'Utente non trovato' });
+        }
+
+        const { id } = req.params;
+
+        const [deadlineExists] = await pool.query(
+            'SELECT * FROM user_deadlines WHERE userId = ? AND deadlineId = ?',
+            [decoded.id, id]
+        );
+
+        if (deadlineExists.length === 0) {
+            return res.status(403).json({ error: 'Non autorizzato', serverMessage: 'Questa scadenza non ti appartiene' });
+        }
+
+        await pool.query('DELETE FROM scheduled_emails WHERE deadlineId = ?', [id]);
+
+        await pool.query('DELETE FROM user_deadlines WHERE userId = ? AND deadlineId = ?', [decoded.id, id]);
+
+        await pool.query('DELETE FROM deadlines WHERE id = ?', [id]);
+
+        res.json({ success: true, message: 'Deadline eliminata con successo', userId: decoded.id });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Errore del server', serverMessage: 'Si è verificato un problema durante l\'eliminazione' });
     }
 });
 
